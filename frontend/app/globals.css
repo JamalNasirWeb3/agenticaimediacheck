@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.font-urdu {
+  font-family: var(--font-urdu), "Noto Nastaliq Urdu", serif;
+  line-height: 2;
+}
