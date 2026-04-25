@@ -14,8 +14,9 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-FACEBOOK_DOMAINS = ("facebook.com", "fb.com", "fb.me", "m.facebook.com")
-TWITTER_DOMAINS  = ("twitter.com", "x.com", "t.co")
+FACEBOOK_DOMAINS  = ("facebook.com", "fb.com", "fb.me", "m.facebook.com")
+TWITTER_DOMAINS   = ("twitter.com", "x.com", "t.co")
+YOUTUBE_DOMAINS   = ("youtube.com", "youtu.be")
 BLOCKED_PLATFORMS = ("facebook", "instagram", "twitter")
 
 
@@ -149,12 +150,91 @@ def _fetch_via_serp(url: str, platform: str) -> dict:
     }
 
 
+def _extract_youtube_id(url: str) -> str | None:
+    parsed = urlparse(url)
+    if any(d in parsed.netloc for d in ("youtu.be",)):
+        return parsed.path.strip("/") or None
+    return parse_qs(parsed.query).get("v", [None])[0]
+
+
+def _fetch_youtube(url: str) -> dict:
+    """
+    Fetch YouTube video info without the YouTube Data API.
+    1. oEmbed (always works, gives title + channel)
+    2. Direct page fetch for og:description (works on most IPs)
+    3. SerpAPI title-based search as last resort
+    """
+    title = channel = description = ""
+
+    # oEmbed — public endpoint, no auth, works from cloud servers
+    try:
+        r = requests.get(
+            f"https://www.youtube.com/oembed?url={url}&format=json",
+            headers=HEADERS, timeout=10,
+        )
+        if r.status_code == 200:
+            d = r.json()
+            title   = d.get("title", "")
+            channel = d.get("author_name", "")
+    except Exception:
+        pass
+
+    # Direct page fetch for description (may fail on cloud IPs)
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            if not title:
+                title = _og(soup, "og:title")
+            description = _og(soup, "og:description")
+            if not channel:
+                channel = _og(soup, "og:site_name")
+    except Exception:
+        pass
+
+    # SerpAPI fallback using the video title as a search query
+    if not description:
+        serpapi_key = os.getenv("SERPAPI_KEY", "")
+        if serpapi_key and serpapi_key != "your_serpapi_key_here":
+            query = f'"{title}" youtube' if title else url
+            for r in _serp_search(query, serpapi_key, num=5):
+                snippet = r.get("snippet", "")
+                if snippet:
+                    description = snippet
+                    if not title:
+                        title = r.get("title", "")
+                    break
+
+    if not title and not description:
+        raise ValueError(
+            "Could not retrieve content for this YouTube video. "
+            "Try pasting the video title or description in the 'Paste Text' tab."
+        )
+
+    parts = []
+    if title:       parts.append(f"Title: {title}")
+    if channel:     parts.append(f"Channel: {channel}")
+    if description: parts.append(f"\nDescription: {description}")
+
+    return {
+        "platform": "youtube",
+        "url": url,
+        "title": title or None,
+        "author": channel or None,
+        "published_date": None,
+        "text": "\n".join(parts),
+    }
+
+
 def fetch_url_content(url: str) -> dict:
     """
     Fetch a public URL and extract readable content + metadata.
     Social platforms fall back to SerpAPI when they block direct access.
     """
     platform = detect_platform(url)
+
+    if platform == "youtube":
+        return _fetch_youtube(url)
 
     if platform in BLOCKED_PLATFORMS:
         # Best-effort direct fetch (mobile Facebook)
