@@ -71,10 +71,16 @@ def _serp_search(query: str, serpapi_key: str, num: int = 5) -> list[dict]:
 
 def _fetch_via_serp(url: str, platform: str) -> dict:
     """
-    Retrieve Facebook/Instagram/Twitter content via SerpAPI with multiple strategies.
+    Retrieve content via SerpAPI for blocked/paywalled URLs.
+    Used for social platforms and any web URL that returns 4xx.
     """
     serpapi_key = os.getenv("SERPAPI_KEY", "")
     if not serpapi_key or serpapi_key == "your_serpapi_key_here":
+        if platform == "web":
+            raise ValueError(
+                "This page blocked direct access (403/401). "
+                "Add a SERPAPI_KEY to .env to enable fallback search."
+            )
         raise ValueError(
             f"This {platform} link cannot be fetched directly (login required). "
             "Add a SERPAPI_KEY to .env to enable fallback search."
@@ -121,6 +127,12 @@ def _fetch_via_serp(url: str, platform: str) -> dict:
 
     text = "\n".join(parts).strip()
     if not text:
+        if platform == "web":
+            raise ValueError(
+                "Could not retrieve content for this URL. "
+                "The page may be paywalled, private, or not indexed by Google. "
+                "Try pasting the article text directly in the 'Paste Text' tab."
+            )
         raise ValueError(
             f"Could not retrieve content for this {platform} link. "
             "The post may be private, deleted, or not yet indexed by Google. "
@@ -180,6 +192,13 @@ def fetch_url_content(url: str) -> dict:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
         resp.raise_for_status()
+    except requests.HTTPError as e:
+        # Paywalled / bot-blocked pages: fall back to SerpAPI
+        status = e.response.status_code if e.response is not None else 0
+        if status in (401, 403, 429):
+            print(f"[url-fetch] {status} from {url} — falling back to SerpAPI", flush=True)
+            return _fetch_via_serp(url, "web")
+        raise ValueError(f"Could not fetch URL: {e}")
     except requests.RequestException as e:
         raise ValueError(f"Could not fetch URL: {e}")
 

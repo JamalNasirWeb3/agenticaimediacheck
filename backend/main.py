@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from models import FactCheckRequest, FactCheckResult
-from fact_checker import fact_check_text, extract_tweet_from_image, ALLOWED_MEDIA_TYPES
+from fact_checker import fact_check_text, extract_tweet_from_image, extract_youtube_from_image, extract_image_content, ALLOWED_MEDIA_TYPES
 from url_fetcher import fetch_url_content
 
 app = FastAPI(title="FactCheck API", version="0.1.0")
@@ -75,13 +75,18 @@ def _sanitize_result(result: dict, platform: str | None = None, url: str | None 
     except (TypeError, ValueError):
         result["authenticity_score"] = 0.0
 
-    # Normalise verdict values to uppercase
+    # Normalise verdict values to uppercase; map unknown values to UNVERIFIED
+    _valid_verdicts = {"TRUE", "FALSE", "MISLEADING", "MIXED", "UNVERIFIED"}
     for field in ("overall_verdict",):
-        if isinstance(result.get(field), str):
-            result[field] = result[field].upper()
+        v = result.get(field)
+        if isinstance(v, str):
+            v = v.upper()
+            result[field] = v if v in _valid_verdicts else "UNVERIFIED"
     for claim in result.get("claims", []):
-        if isinstance(claim.get("verdict"), str):
-            claim["verdict"] = claim["verdict"].upper()
+        v = claim.get("verdict")
+        if isinstance(v, str):
+            v = v.upper()
+            claim["verdict"] = v if v in _valid_verdicts else "UNVERIFIED"
 
     # Strip unknown ResourceCategory values to "other"
     valid_categories = {"news", "academic", "government", "fact-check", "social-media", "other"}
@@ -96,8 +101,21 @@ def _sanitize_result(result: dict, platform: str | None = None, url: str | None 
             v = tweet_meta.get(field)
             if v is not None and not isinstance(v, str):
                 tweet_meta[field] = str(v)
-        # Ensure tweet_text is always a non-None string
         tweet_meta["tweet_text"] = str(tweet_meta.get("tweet_text") or "")
+
+    # Coerce youtube_metadata stat fields to strings
+    yt_meta = result.get("youtube_metadata")
+    if isinstance(yt_meta, dict):
+        for field in ("view_count", "like_count"):
+            v = yt_meta.get(field)
+            if v is not None and not isinstance(v, str):
+                yt_meta[field] = str(v)
+        yt_meta["video_text"] = str(yt_meta.get("video_text") or yt_meta.get("video_title") or "")
+
+    # Coerce image_metadata extracted_text to string
+    img_meta = result.get("image_metadata")
+    if isinstance(img_meta, dict):
+        img_meta["extracted_text"] = str(img_meta.get("extracted_text") or "")
 
     try:
         return FactCheckResult.model_validate(result)
@@ -126,7 +144,9 @@ async def fact_check(request: FactCheckRequest):
         raise HTTPException(status_code=400, detail="Text too long (max 5000 characters)")
     try:
         result = await fact_check_text(text, language=request.language)
-        return JSONResponse(content=_sanitize_result(result).model_dump(mode="json"))
+        dumped = _sanitize_result(result).model_dump(mode="json")
+        body = json.dumps(dumped, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return Response(content=body.encode("utf-8"), media_type="application/json")
     except ValidationError as e:
         raise HTTPException(status_code=502, detail=f"Response validation error: {e.error_count()} field(s) invalid")
     except ValueError as e:
@@ -195,6 +215,83 @@ async def fact_check_image(
         return JSONResponse(status_code=500, content={"detail": "Something went wrong while processing the image. Please try again."})
 
 
+@app.post("/api/fact-check-youtube-image")
+async def fact_check_youtube_image(
+    file: UploadFile = File(...),
+    language: str = Form("english"),
+):
+    try:
+        if file.content_type not in ALLOWED_MEDIA_TYPES:
+            return JSONResponse(status_code=422, content={"detail": f"Unsupported image type '{file.content_type}'."})
+
+        image_data = await file.read()
+        if len(image_data) > 5 * 1024 * 1024:
+            return JSONResponse(status_code=422, content={"detail": "Image too large (max 5 MB)"})
+
+        youtube_data = await extract_youtube_from_image(image_data, file.content_type)
+        print(f"[youtube_data] channel={youtube_data.get('channel')} text_len={len(str(youtube_data.get('video_text','')))} chars", flush=True)
+
+        video_text = str(youtube_data.get("video_text") or "")
+        result = await fact_check_text(video_text, language=language)
+        result["youtube_metadata"] = youtube_data
+        sanitized = _sanitize_result(result)
+        dumped = sanitized.model_dump(mode="json")
+        body = json.dumps(dumped, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return Response(content=body.encode("utf-8"), media_type="application/json")
+
+    except ValueError as e:
+        msg = str(e)
+        print(f"[user-error] {msg}", flush=True)
+        if "not a youtube" in msg.lower():
+            return JSONResponse(status_code=422, content={"detail": "This image doesn't appear to be a YouTube screenshot. Please upload a screenshot of a YouTube video page."})
+        return JSONResponse(status_code=422, content={"detail": msg})
+    except BaseException as e:
+        traceback.print_exc()
+        print(f"[ERROR] {type(e).__name__}: {e}", flush=True)
+        sys.stdout.flush()
+        return JSONResponse(status_code=500, content={"detail": "Something went wrong while processing the image. Please try again."})
+
+
+@app.post("/api/fact-check-generic-image")
+async def fact_check_generic_image(
+    file: UploadFile = File(...),
+    language: str = Form("english"),
+):
+    try:
+        if file.content_type not in ALLOWED_MEDIA_TYPES:
+            return JSONResponse(status_code=422, content={"detail": f"Unsupported image type '{file.content_type}'."})
+
+        image_data = await file.read()
+        if len(image_data) > 5 * 1024 * 1024:
+            return JSONResponse(status_code=422, content={"detail": "Image too large (max 5 MB)"})
+
+        image_meta = await extract_image_content(image_data, file.content_type)
+        print(f"[image_meta] type={image_meta.get('image_type')} platform={image_meta.get('source_platform')} text_len={len(image_meta.get('extracted_text', ''))} chars", flush=True)
+
+        extracted_text = image_meta.get("extracted_text", "").strip()
+        if not extracted_text:
+            extracted_text = image_meta.get("content_summary") or "No readable text found in the image."
+
+        result = await fact_check_text(extracted_text, language=language)
+        result["image_metadata"] = image_meta
+        sanitized = _sanitize_result(result)
+        dumped = sanitized.model_dump(mode="json")
+        body = json.dumps(dumped, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return Response(content=body.encode("utf-8"), media_type="application/json")
+
+    except ValidationError as e:
+        print(f"[validation-error] {e}", flush=True)
+        raise HTTPException(status_code=502, detail=f"Response validation error: {e.error_count()} field(s) invalid")
+    except ValueError as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Response parsing error: {e}")
+    except BaseException as e:
+        traceback.print_exc()
+        print(f"[ERROR] {type(e).__name__}: {e}", flush=True)
+        sys.stdout.flush()
+        raise HTTPException(status_code=500, detail=f"Image fact-check failed: {type(e).__name__}: {e}")
+
+
 @app.post("/api/fact-check-url")
 async def fact_check_url(request: UrlRequest):
     url = request.url.strip()
@@ -211,12 +308,16 @@ async def fact_check_url(request: UrlRequest):
             author=content.get("author"),
             published_date=content.get("published_date"),
         )
-        return JSONResponse(content=sanitized.model_dump(mode="json"))
+        dumped = sanitized.model_dump(mode="json")
+        body = json.dumps(dumped, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return Response(content=body.encode("utf-8"), media_type="application/json")
     except ValidationError as e:
+        print(f"[validation-error] {e}", flush=True)
         raise HTTPException(status_code=502, detail=f"Response validation error: {e.error_count()} field(s) invalid")
     except ValueError as e:
         traceback.print_exc()
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         traceback.print_exc()
+        print(f"[ERROR] {type(e).__name__}: {e}", flush=True)
         raise HTTPException(status_code=500, detail=f"Fact check failed: {type(e).__name__}: {e}")

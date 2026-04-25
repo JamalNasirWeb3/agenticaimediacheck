@@ -59,9 +59,30 @@ class TweetMetadata(BaseModel):
     replies: Optional[str] = None
 
 
+class YoutubeMetadata(BaseModel):
+    video_title: Optional[str] = None
+    channel: Optional[str] = None
+    verified: Optional[bool] = None      # channel checkmark
+    view_count: Optional[str] = None
+    like_count: Optional[str] = None
+    published_date: Optional[str] = None
+    description: Optional[str] = None
+    video_text: str                      # main content to fact-check
+
+
+class ImageMetadata(BaseModel):
+    image_type: Optional[str] = None       # e.g. "news-screenshot", "whatsapp-forward", "meme"
+    source_platform: Optional[str] = None  # e.g. "WhatsApp", "BBC News"
+    headline: Optional[str] = None         # main headline/title/claim if visible
+    extracted_text: str = ""               # all visible text combined
+    content_summary: Optional[str] = None  # 1-2 sentence description
+
+
 class FactCheckResult(BaseModel):
     article_metadata: Optional[ArticleMetadata] = None
     tweet_metadata: Optional[TweetMetadata] = None
+    youtube_metadata: Optional[YoutubeMetadata] = None
+    image_metadata: Optional[ImageMetadata] = None
     claims: List[Claim]
     propaganda_techniques: List[PropagandaTechnique]
     overall_verdict: Verdict

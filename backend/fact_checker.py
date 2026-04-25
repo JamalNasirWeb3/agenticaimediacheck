@@ -157,6 +157,23 @@ def _extract_json(raw: str) -> dict:
     raise ValueError(f"Could not extract JSON from response: {raw[:300]}")
 
 
+YOUTUBE_EXTRACTION_PROMPT = """You are analyzing a screenshot of a YouTube video page. Extract every visible piece of information.
+
+Respond ONLY with a single valid JSON object — no markdown, no text outside JSON:
+
+{
+  "video_title": "full video title as shown",
+  "channel": "channel name as shown",
+  "verified": true or false (true if checkmark is visible next to channel name, false otherwise),
+  "view_count": "view count as shown (e.g. '1.2M views') or null if not visible",
+  "like_count": "like count as shown (e.g. '45K') or null if not visible",
+  "published_date": "upload date as shown (e.g. '2 years ago' or 'Apr 15, 2023') or null if not visible",
+  "description": "visible description text or null if not visible",
+  "video_text": "combine the video title with any visible description, captions, or on-screen text into one string for fact-checking"
+}
+
+If this is not a YouTube video screenshot, respond with: {"error": "Not a YouTube screenshot"}"""
+
 TWEET_EXTRACTION_PROMPT = """You are analyzing a screenshot of a tweet. Extract every visible piece of information.
 
 Respond ONLY with a single valid JSON object — no markdown, no text outside JSON:
@@ -173,6 +190,20 @@ Respond ONLY with a single valid JSON object — no markdown, no text outside JS
 }
 
 If this is not a tweet/X post screenshot, respond with: {"error": "Not a tweet image"}"""
+
+IMAGE_EXTRACTION_PROMPT = """You are analyzing an image. It may be any type: a news article screenshot, WhatsApp forward, meme, infographic, document scan, social media post, SMS screenshot, email, or any other visual content.
+
+Extract all information that could be fact-checked.
+
+Respond ONLY with a single valid JSON object — no markdown, no text outside JSON:
+
+{
+  "image_type": "news-screenshot" or "whatsapp-forward" or "meme" or "infographic" or "document" or "social-media-post" or "sms-screenshot" or "email-screenshot" or "headline" or "photo-with-text" or "other",
+  "source_platform": "platform, app, or publication visible in the image (e.g. 'WhatsApp', 'BBC News', 'Facebook') — or null if not identifiable",
+  "headline": "the main headline, title, or primary claim shown — or null if not present",
+  "extracted_text": "ALL visible text from the image in reading order. Include headlines, body text, captions, labels, usernames, dates, hashtags, URLs, statistics — everything readable. If no text is visible, use an empty string.",
+  "content_summary": "1-2 sentences describing what this image shows and what claims or information it contains"
+}"""
 
 ALLOWED_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
@@ -214,6 +245,82 @@ async def extract_tweet_from_image(image_data: bytes, media_type: str) -> dict:
     if isinstance(v, str):
         result["verified"] = v.lower() == "true"
 
+    return result
+
+
+async def extract_youtube_from_image(image_data: bytes, media_type: str) -> dict:
+    if media_type not in ALLOWED_MEDIA_TYPES:
+        raise ValueError(f"Unsupported image type: {media_type}")
+
+    image_b64 = base64.standard_b64encode(image_data).decode("utf-8")
+
+    response = await client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": image_b64},
+                },
+                {"type": "text", "text": YOUTUBE_EXTRACTION_PROMPT},
+            ],
+        }],
+    )
+
+    u = response.usage
+    print(f"[vision-youtube] input={u.input_tokens} | output={u.output_tokens} | total={u.input_tokens + u.output_tokens}", flush=True)
+
+    raw = next((b.text for b in response.content if hasattr(b, "text")), "")
+    result = _extract_json(raw)
+
+    if "error" in result:
+        raise ValueError(result["error"])
+
+    title = result.get("video_title", "").strip()
+    text_content = result.get("video_text", "").strip()
+    if not title and not text_content:
+        raise ValueError("Could not extract video content from the image")
+
+    if not text_content:
+        result["video_text"] = title
+
+    v = result.get("verified")
+    if isinstance(v, str):
+        result["verified"] = v.lower() == "true"
+
+    return result
+
+
+async def extract_image_content(image_data: bytes, media_type: str) -> dict:
+    if media_type not in ALLOWED_MEDIA_TYPES:
+        raise ValueError(f"Unsupported image type: {media_type}")
+
+    image_b64 = base64.standard_b64encode(image_data).decode("utf-8")
+
+    response = await client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": image_b64},
+                },
+                {"type": "text", "text": IMAGE_EXTRACTION_PROMPT},
+            ],
+        }],
+    )
+
+    u = response.usage
+    print(f"[vision-image] input={u.input_tokens} | output={u.output_tokens} | total={u.input_tokens + u.output_tokens}", flush=True)
+
+    raw = next((b.text for b in response.content if hasattr(b, "text")), "")
+    result = _extract_json(raw)
+
+    result["extracted_text"] = str(result.get("extracted_text") or "")
     return result
 
 

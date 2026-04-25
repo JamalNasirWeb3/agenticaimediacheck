@@ -41,9 +41,30 @@ export interface TweetMetadata {
   replies: string | null;
 }
 
+export interface YoutubeMetadata {
+  video_title: string | null;
+  channel: string | null;
+  verified: boolean | null;
+  view_count: string | null;
+  like_count: string | null;
+  published_date: string | null;
+  description: string | null;
+  video_text: string;
+}
+
+export interface ImageMetadata {
+  image_type: string | null;
+  source_platform: string | null;
+  headline: string | null;
+  extracted_text: string;
+  content_summary: string | null;
+}
+
 export interface FactCheckResult {
   article_metadata: ArticleMetadata | null;
   tweet_metadata: TweetMetadata | null;
+  youtube_metadata: YoutubeMetadata | null;
+  image_metadata: ImageMetadata | null;
   claims: Claim[];
   propaganda_techniques: PropagandaTechnique[];
   overall_verdict: Verdict;
