@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Noto_Nastaliq_Urdu } from "next/font/google";
 import "./globals.css";
+import "react-image-crop/dist/ReactCrop.css";
 
 const urduFont = Noto_Nastaliq_Urdu({ subsets: ["arabic"], variable: "--font-urdu", weight: ["400", "700"] });
 

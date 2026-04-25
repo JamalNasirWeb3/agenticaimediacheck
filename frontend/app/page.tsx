@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import ReactCrop, { type Crop, type PixelCrop } from "react-image-crop";
 import type { FactCheckResult, Verdict, ResourceCategory, ArticleMetadata, TweetMetadata, YoutubeMetadata, ImageMetadata } from "./types";
 import { T, type Lang } from "./i18n";
 
@@ -294,6 +295,13 @@ export default function Home() {
   const [photoFile, setPhotoFile]       = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
+  const [cropSrc, setCropSrc]             = useState<string | null>(null);
+  const [cropOrigFile, setCropOrigFile]   = useState<File | null>(null);
+  const [cropTarget, setCropTarget]       = useState<"image" | "youtube" | "photo" | null>(null);
+  const [crop, setCrop]                   = useState<Crop | undefined>();
+  const [completedCrop, setCompletedCrop] = useState<PixelCrop | undefined>();
+  const cropImgRef = useRef<HTMLImageElement>(null);
+
   const fileInputRef    = useRef<HTMLInputElement>(null);
   const youtubeInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef   = useRef<HTMLInputElement>(null);
@@ -316,6 +324,58 @@ export default function Home() {
     setPhotoPreview(URL.createObjectURL(file));
   }
 
+  function openCrop(file: File, target: "image" | "youtube" | "photo") {
+    setCropSrc(URL.createObjectURL(file));
+    setCropOrigFile(file);
+    setCropTarget(target);
+    setCrop(undefined);
+    setCompletedCrop(undefined);
+  }
+
+  function closeCrop() {
+    if (cropSrc) URL.revokeObjectURL(cropSrc);
+    setCropSrc(null); setCropOrigFile(null); setCropTarget(null);
+  }
+
+  function skipCrop() {
+    if (cropOrigFile && cropTarget) {
+      if (cropTarget === "image") setImage(cropOrigFile);
+      else if (cropTarget === "youtube") setYoutubeImage(cropOrigFile);
+      else setPhoto(cropOrigFile);
+    }
+    closeCrop();
+  }
+
+  async function getCroppedFile(image: HTMLImageElement, px: PixelCrop): Promise<File> {
+    const scaleX = image.naturalWidth / image.width;
+    const scaleY = image.naturalHeight / image.height;
+    const canvas = document.createElement("canvas");
+    canvas.width  = Math.floor(px.width  * scaleX);
+    canvas.height = Math.floor(px.height * scaleY);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(image,
+      Math.floor(px.x * scaleX), Math.floor(px.y * scaleY),
+      Math.floor(px.width * scaleX), Math.floor(px.height * scaleY),
+      0, 0, canvas.width, canvas.height);
+    return new Promise((resolve, reject) =>
+      canvas.toBlob(blob => {
+        if (!blob) { reject(new Error("Crop failed")); return; }
+        resolve(new File([blob], "cropped.png", { type: "image/png" }));
+      }, "image/png"),
+    );
+  }
+
+  async function applyCrop() {
+    if (!completedCrop?.width || !completedCrop?.height || !cropImgRef.current || !cropTarget) return;
+    try {
+      const file = await getCroppedFile(cropImgRef.current, completedCrop);
+      if (cropTarget === "image") setImage(file);
+      else if (cropTarget === "youtube") setYoutubeImage(file);
+      else setPhoto(file);
+    } catch { /* ignore */ }
+    closeCrop();
+  }
+
   useEffect(() => {
     if (tab !== "image" && tab !== "youtube" && tab !== "photo") return;
     function onPaste(e: ClipboardEvent) {
@@ -323,9 +383,9 @@ export default function Home() {
       if (!item) return;
       const file = item.getAsFile();
       if (!file) return;
-      if (tab === "image") setImage(file);
-      else if (tab === "youtube") setYoutubeImage(file);
-      else setPhoto(file);
+      if (tab === "image") openCrop(file, "image");
+      else if (tab === "youtube") openCrop(file, "youtube");
+      else openCrop(file, "photo");
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -333,8 +393,8 @@ export default function Home() {
 
   function onDragOver(e: React.DragEvent)  { e.preventDefault(); setIsDragging(true); }
   function onDragLeave()                   { setIsDragging(false); }
-  function onDrop(e: React.DragEvent)      { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) setImage(f); }
-  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) { const f = e.target.files?.[0]; if (f) setImage(f); }
+  function onDrop(e: React.DragEvent)      { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) openCrop(f, "image"); }
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) { const f = e.target.files?.[0]; if (f) openCrop(f, "image"); }
 
   async function handleTextSubmit(e: React.FormEvent) {
     e.preventDefault(); if (!text.trim()) return;
@@ -593,7 +653,7 @@ export default function Home() {
                 {youtubeMode === "screenshot" && (
                   <form onSubmit={handleYoutubeSubmit}>
                     <input ref={youtubeInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden"
-                      onChange={(e) => { const f = e.target.files?.[0]; if (f) setYoutubeImage(f); }} />
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) openCrop(f, "youtube"); }} />
                     {youtubePreview ? (
                       <div className="relative mb-4">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -608,7 +668,7 @@ export default function Home() {
                       <div
                         onClick={() => youtubeInputRef.current?.click()}
                         onDragOver={onDragOver} onDragLeave={onDragLeave}
-                        onDrop={(e) => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) setYoutubeImage(f); }}
+                        onDrop={(e) => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) openCrop(f, "youtube"); }}
                         className={`w-full h-44 flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed cursor-pointer transition ${
                           isDragging ? "border-red-500 bg-red-950/20" : "border-slate-700 bg-slate-800/30 hover:border-slate-600 hover:bg-slate-800/50"
                         }`}
@@ -655,7 +715,7 @@ export default function Home() {
             {tab === "photo" && (
               <form onSubmit={handlePhotoSubmit}>
                 <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) setPhoto(f); }} />
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) openCrop(f, "photo"); }} />
 
                 {photoPreview ? (
                   <div className="relative mb-4">
@@ -671,7 +731,7 @@ export default function Home() {
                   <div
                     onClick={() => photoInputRef.current?.click()}
                     onDragOver={onDragOver} onDragLeave={onDragLeave}
-                    onDrop={(e) => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) setPhoto(f); }}
+                    onDrop={(e) => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files[0]; if (f?.type.startsWith("image/")) openCrop(f, "photo"); }}
                     className={`w-full h-52 flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed cursor-pointer transition ${
                       isDragging ? "border-violet-500 bg-violet-950/20" : "border-slate-700 bg-slate-800/30 hover:border-slate-600 hover:bg-slate-800/50"
                     }`}
@@ -726,9 +786,24 @@ export default function Home() {
             <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
             </svg>
-            <div>
+            <div className="flex-1">
               <p className="text-red-300 font-semibold text-sm">{t.errorLabel}</p>
               <p className="text-red-400 text-sm mt-0.5">{error}</p>
+              {error.includes("doesn't appear to be") && (tab === "youtube" || tab === "image") && (
+                <button
+                  onClick={() => {
+                    const file = tab === "youtube" ? youtubeFile : imageFile;
+                    if (file) { setPhoto(file); setTab("photo"); }
+                    setError(null);
+                  }}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-300 bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 rounded-lg transition"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                  </svg>
+                  Try as Generic Image instead →
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -858,6 +933,37 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      {/* ── Crop modal ────────────────────────────────────────────────────── */}
+      {cropSrc && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+              <h2 className="text-sm font-semibold text-white">Crop Image</h2>
+              <button onClick={skipCrop} className="text-slate-400 hover:text-white transition text-xs px-2 py-1 rounded hover:bg-slate-800">✕</button>
+            </div>
+            <div className="p-4 overflow-auto flex items-center justify-center bg-slate-950" style={{ maxHeight: "65vh" }}>
+              <ReactCrop crop={crop} onChange={c => setCrop(c)} onComplete={c => setCompletedCrop(c)}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img ref={cropImgRef} src={cropSrc} alt="Crop" style={{ maxWidth: "100%", maxHeight: "60vh", objectFit: "contain" }} />
+              </ReactCrop>
+            </div>
+            <div className="flex items-center justify-between px-5 py-4 border-t border-slate-800 gap-3">
+              <p className="text-xs text-slate-500">Click and drag to select the area you want to keep</p>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={skipCrop}
+                  className="px-4 py-2 text-sm text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl border border-slate-700 transition">
+                  Use Full Image
+                </button>
+                <button onClick={applyCrop} disabled={!completedCrop?.width}
+                  className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 rounded-xl transition">
+                  Crop & Use
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer className="border-t border-slate-800/60 mt-12">
