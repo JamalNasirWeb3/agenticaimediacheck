@@ -169,7 +169,8 @@ def _fetch_youtube(url: str) -> dict:
     # oEmbed — public endpoint, no auth, works from cloud servers
     try:
         r = requests.get(
-            f"https://www.youtube.com/oembed?url={url}&format=json",
+            "https://www.youtube.com/oembed",
+            params={"url": url, "format": "json"},
             headers=HEADERS, timeout=10,
         )
         if r.status_code == 200:
@@ -226,20 +227,38 @@ def _fetch_youtube(url: str) -> dict:
     }
 
 
+def _clean_twitter_url(url: str) -> str:
+    """Strip tracking params and normalise to twitter.com for oEmbed."""
+    parsed = urlparse(url)
+    # Keep only the path (e.g. /MIshaqDar50/status/123)
+    return f"https://twitter.com{parsed.path}"
+
+
 def _fetch_twitter(url: str) -> dict:
     """
     Fetch tweet content using Twitter's public oEmbed endpoint (no auth).
-    Falls back to SerpAPI search if oEmbed is unavailable.
+    1. Normalise URL and use requests params= so it is properly encoded
+    2. Parse tweet text from the oEmbed HTML blockquote
+    3. SerpAPI fallback using handle extracted from URL path
     """
     tweet_text = ""
     author_name = ""
 
-    # oEmbed — public, no API key, returns tweet HTML with full text
+    # Extract @handle from path as a reliable fallback search term
+    path_parts = [p for p in urlparse(url).path.split("/") if p]
+    handle = path_parts[0] if path_parts else ""
+
+    clean_url = _clean_twitter_url(url)
+    print(f"[twitter-oembed] clean_url={clean_url}", flush=True)
+
+    # oEmbed — use params= dict so requests URL-encodes the tweet URL correctly
     try:
         r = requests.get(
-            f"https://publish.twitter.com/oembed?url={url}&format=json&omit_script=true",
+            "https://publish.twitter.com/oembed",
+            params={"url": clean_url, "format": "json", "omit_script": "true"},
             headers=HEADERS, timeout=10,
         )
+        print(f"[twitter-oembed] status={r.status_code}", flush=True)
         if r.status_code == 200:
             data = r.json()
             author_name = data.get("author_name", "")
@@ -249,14 +268,15 @@ def _fetch_twitter(url: str) -> dict:
                 p = soup.find("p")
                 if p:
                     tweet_text = p.get_text(separator=" ", strip=True)
-    except Exception:
-        pass
+                    print(f"[twitter-oembed] extracted {len(tweet_text)} chars", flush=True)
+    except Exception as e:
+        print(f"[twitter-oembed] error: {e}", flush=True)
 
-    # SerpAPI fallback — search by author name if we have it, else raw URL
+    # SerpAPI fallback — search by @handle which we always have from the URL
     if not tweet_text:
         serpapi_key = os.getenv("SERPAPI_KEY", "")
         if serpapi_key and serpapi_key != "your_serpapi_key_here":
-            query = f'"{author_name}" twitter' if author_name else url
+            query = f'"{author_name or handle}" twitter site:twitter.com OR site:x.com'
             parts = []
             for r in _serp_search(query, serpapi_key, num=5):
                 if r.get("snippet"):
@@ -271,15 +291,16 @@ def _fetch_twitter(url: str) -> dict:
         )
 
     text_parts = []
-    if author_name:
-        text_parts.append(f"Tweet by {author_name}:")
+    if author_name or handle:
+        label = author_name or f"@{handle}"
+        text_parts.append(f"Tweet by {label}:")
     text_parts.append(tweet_text)
 
     return {
         "platform": "twitter",
         "url": url,
         "title": None,
-        "author": author_name or None,
+        "author": author_name or handle or None,
         "published_date": None,
         "text": "\n".join(text_parts),
     }
