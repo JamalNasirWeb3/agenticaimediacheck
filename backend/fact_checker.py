@@ -123,14 +123,33 @@ def _run_serp_search(query: str) -> tuple[str, list]:
     if not serpapi_key or serpapi_key == "your_serpapi_key_here":
         return "Search unavailable (SERPAPI_KEY not configured).", []
 
-    params = {"engine": "google", "q": query, "api_key": serpapi_key, "num": 3}
-    data = GoogleSearch(params).get_dict()
-    organic = data.get("organic_results", [])
+    hits: list[dict] = []
+
+    # Primary: Google web search
+    try:
+        data = GoogleSearch({"engine": "google", "q": query, "api_key": serpapi_key, "num": 5}).get_dict()
+        hits = data.get("organic_results", [])[:5]
+    except Exception as e:
+        print(f"[serp-web] error: {e}", flush=True)
+
+    # Fallback: Google News — better for recent diplomatic/political events
+    if not hits:
+        try:
+            print(f"[serp-news] web empty, trying google_news for: {query}", flush=True)
+            data = GoogleSearch({"engine": "google_news", "q": query, "api_key": serpapi_key}).get_dict()
+            for n in data.get("news_results", [])[:5]:
+                hits.append({
+                    "title":   n.get("title", ""),
+                    "link":    n.get("link", ""),
+                    "snippet": n.get("snippet") or n.get("date", ""),
+                })
+        except Exception as e:
+            print(f"[serp-news] error: {e}", flush=True)
 
     resources, lines = [], []
-    for r in organic[:3]:
-        title = r.get("title", "")
-        url = r.get("link", "")
+    for r in hits[:5]:
+        title   = r.get("title", "")
+        url     = r.get("link", "")
         snippet = r.get("snippet", "")
         lines.append(f"- {title}\n  URL: {url}\n  {snippet}")
         if url:
