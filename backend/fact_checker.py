@@ -5,6 +5,7 @@ import math
 import re
 import base64
 import asyncio
+from datetime import date as _date
 import anthropic
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
@@ -40,6 +41,8 @@ TOOLS = [
 ]
 
 PROMPT_TEMPLATE = """You are an expert fact-checker and media literacy analyst.
+
+Today's date is {today}. Use this when assessing whether dates in the content are past, present, or future.
 
 IMPORTANT: Write ALL text fields in the JSON (summary, explanations, technique descriptions) in {language}. Only the JSON keys and enum values (TRUE/FALSE/MISLEADING etc.) must remain in English.
 
@@ -325,7 +328,7 @@ async def extract_image_content(image_data: bytes, media_type: str) -> dict:
 
 
 async def fact_check_text(text: str, language: str = "english") -> dict:
-    prompt = PROMPT_TEMPLATE.format(text=text, max_searches=MAX_SEARCHES, language=language)
+    prompt = PROMPT_TEMPLATE.format(text=text, max_searches=MAX_SEARCHES, language=language, today=_date.today().isoformat())
     messages = [{"role": "user", "content": prompt}]
     all_resources: list[dict] = []
     search_count = 0
