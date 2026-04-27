@@ -230,7 +230,6 @@ def _fetch_youtube(url: str) -> dict:
 def _clean_twitter_url(url: str) -> str:
     """Strip tracking params and normalise to twitter.com for oEmbed."""
     parsed = urlparse(url)
-    # Keep only the path (e.g. /MIshaqDar50/status/123)
     return f"https://twitter.com{parsed.path}"
 
 
@@ -239,17 +238,24 @@ def _fetch_twitter(url: str) -> dict:
     Fetch tweet content using Twitter's public oEmbed endpoint (no auth).
     1. Normalise URL and use requests params= so it is properly encoded
     2. Parse tweet text from the oEmbed HTML blockquote
-    3. SerpAPI fallback using handle extracted from URL path
+    3. If the original URL contains ref_url= (embedded from a news article),
+       fetch that article for additional corroborating context
+    4. SerpAPI fallback using handle extracted from URL path
     """
     tweet_text = ""
     author_name = ""
 
-    # Extract @handle from path as a reliable fallback search term
-    path_parts = [p for p in urlparse(url).path.split("/") if p]
+    parsed = urlparse(url)
+    path_parts = [p for p in parsed.path.split("/") if p]
     handle = path_parts[0] if path_parts else ""
 
+    # Extract ref_url — present when tweet is copied from an embed (e.g. Dawn News)
+    qs = parse_qs(parsed.query)
+    ref_url_raw = qs.get("ref_url", [None])[0]
+    ref_url = unquote(ref_url_raw) if ref_url_raw else None
+
     clean_url = _clean_twitter_url(url)
-    print(f"[twitter-oembed] clean_url={clean_url}", flush=True)
+    print(f"[twitter-oembed] clean_url={clean_url} ref_url={ref_url}", flush=True)
 
     # oEmbed — use params= dict so requests URL-encodes the tweet URL correctly
     try:
@@ -272,7 +278,26 @@ def _fetch_twitter(url: str) -> dict:
     except Exception as e:
         print(f"[twitter-oembed] error: {e}", flush=True)
 
-    # SerpAPI fallback — search by @handle which we always have from the URL
+    # Fetch the referring article (e.g. the Dawn News page that embedded the tweet)
+    article_context = ""
+    article_source = ""
+    if ref_url:
+        try:
+            r = requests.get(ref_url, headers=HEADERS, timeout=12)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                article_source = _og(soup, "og:site_name") or urlparse(ref_url).netloc
+                body = ""
+                for tag in soup.find_all(["article", "main"]):
+                    body = tag.get_text(separator=" ", strip=True)
+                    if len(body) > 200:
+                        break
+                article_context = (body or _og(soup, "og:description"))[:2000]
+                print(f"[twitter-ref] {article_source}: {len(article_context)} chars", flush=True)
+        except Exception as e:
+            print(f"[twitter-ref] failed: {e}", flush=True)
+
+    # SerpAPI fallback if oEmbed returned nothing
     if not tweet_text:
         serpapi_key = os.getenv("SERPAPI_KEY", "")
         if serpapi_key and serpapi_key != "your_serpapi_key_here":
@@ -295,6 +320,10 @@ def _fetch_twitter(url: str) -> dict:
         label = author_name or f"@{handle}"
         text_parts.append(f"Tweet by {label}:")
     text_parts.append(tweet_text)
+    if article_context:
+        text_parts.append(
+            f"\n[Article from {article_source} that references this tweet:]\n{article_context}"
+        )
 
     return {
         "platform": "twitter",
