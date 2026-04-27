@@ -18,7 +18,7 @@ if not _api_key:
 
 client = anthropic.AsyncAnthropic(api_key=_api_key)
 
-MAX_SEARCHES = 3
+MAX_SEARCHES = 5
 
 TOOLS = [
     {
@@ -48,7 +48,11 @@ IMPORTANT: Write ALL text fields in the JSON (summary, explanations, technique d
 
 Analyze the following text:
 1. First, extract any article metadata present in the text (title, author, date, DOI, publication, URL, content type)
-2. Use web_search (max {max_searches} times) to verify the most critical claims
+2. Use web_search (max {max_searches} times) to verify the most critical claims. Search strategy:
+   - For statements by named officials or public figures: include their full name and title in the query (e.g. "Iranian Foreign Minister Abbas Araghchi Pakistan visit")
+   - For events: include the country, event type, and year
+   - For social media posts: search for news coverage of the claim, not the post itself
+   - Prefer specific queries over generic ones — named entities + date outperform vague topic searches
 3. Extract up to 5 key verifiable claims and assess each
 4. Detect propaganda techniques (e.g., fear-mongering, false dichotomy, bandwagon, cherry-picking, ad hominem, straw man, appeal to emotion, false urgency)
 5. Produce an overall authenticity verdict
