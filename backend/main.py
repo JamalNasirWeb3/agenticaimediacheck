@@ -189,7 +189,21 @@ async def fact_check_image(
         print(f"[tweet_data] verified={tweet_data.get('verified')} text_len={len(str(tweet_data.get('tweet_text','')))} chars", flush=True)
 
         tweet_text = str(tweet_data.get("tweet_text") or "")
-        result = await fact_check_text(tweet_text, language=language)
+        username   = tweet_data.get("username", "")
+        handle     = tweet_data.get("handle", "")
+        verified   = tweet_data.get("verified", False)
+        date       = tweet_data.get("date", "")
+        author_line = ""
+        if username or handle:
+            parts = [p for p in [username, handle] if p]
+            author_line = "Tweet by " + " ".join(parts)
+            if verified:
+                author_line += " (verified account)"
+            if date:
+                author_line += f" on {date}"
+            author_line += ":\n\n"
+        enriched_text = author_line + tweet_text
+        result = await fact_check_text(enriched_text, language=language)
         print("[step1] fact_check_text done", flush=True)
         result["tweet_metadata"] = tweet_data
         print("[step2] tweet_metadata assigned", flush=True)
@@ -232,7 +246,16 @@ async def fact_check_youtube_image(
         print(f"[youtube_data] channel={youtube_data.get('channel')} text_len={len(str(youtube_data.get('video_text','')))} chars", flush=True)
 
         video_text = str(youtube_data.get("video_text") or "")
-        result = await fact_check_text(video_text, language=language)
+        channel    = youtube_data.get("channel", "")
+        yt_verified = youtube_data.get("verified", False)
+        yt_author_line = ""
+        if channel:
+            yt_author_line = f"YouTube video by {channel}"
+            if yt_verified:
+                yt_author_line += " (verified channel)"
+            yt_author_line += ":\n\n"
+        enriched_video_text = yt_author_line + video_text
+        result = await fact_check_text(enriched_video_text, language=language)
         result["youtube_metadata"] = youtube_data
         sanitized = _sanitize_result(result)
         dumped = sanitized.model_dump(mode="json")
