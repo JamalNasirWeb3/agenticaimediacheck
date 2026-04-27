@@ -285,6 +285,8 @@ export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [youtubeFile, setYoutubeFile]   = useState<File | null>(null);
   const [youtubePreview, setYoutubePreview] = useState<string | null>(null);
+  const [tweetMode, setTweetMode]       = useState<"screenshot" | "url">("screenshot");
+  const [tweetUrl, setTweetUrl]         = useState("");
   const [youtubeMode, setYoutubeMode]   = useState<"screenshot" | "url">("screenshot");
   const [youtubeUrl, setYoutubeUrl]     = useState("");
   const [isDragging, setIsDragging]     = useState(false);
@@ -404,6 +406,10 @@ export default function Home() {
     e.preventDefault(); if (!url.trim()) return;
     await runFactCheck(() => fetch("/api/fact-check-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, language: lang === "ur" ? "urdu" : "english" }) }));
   }
+  async function handleTweetUrlSubmit(e: React.FormEvent) {
+    e.preventDefault(); if (!tweetUrl.trim()) return;
+    await runFactCheck(() => fetch("/api/fact-check-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: tweetUrl, language: lang === "ur" ? "urdu" : "english" }) }));
+  }
   async function handleImageSubmit(e: React.FormEvent) {
     e.preventDefault(); if (!imageFile) return;
     const fd = new FormData(); fd.append("file", imageFile); fd.append("language", lang === "ur" ? "urdu" : "english");
@@ -448,7 +454,7 @@ export default function Home() {
   }, {} as Record<string, typeof result.searched_resources>);
 
   const loadingMsg = tab === "url" ? t.loadingLink
-    : tab === "image" ? t.loadingImage
+    : tab === "image" ? (tweetMode === "url" ? t.loadingTweetUrl : t.loadingImage)
     : tab === "youtube" ? (youtubeMode === "url" ? t.loadingYoutubeUrl : t.loadingYoutube)
     : tab === "photo" ? t.loadingPhoto
     : t.loadingText;
@@ -594,44 +600,81 @@ export default function Home() {
               </form>
             )}
 
-            {/* Tweet image tab */}
+            {/* Tweet / X tab */}
             {tab === "image" && (
-              <form onSubmit={handleImageSubmit}>
-                <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={onFileChange} />
-                {imagePreview ? (
-                  <div className="relative mb-4">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={imagePreview} alt="Tweet screenshot preview" className="w-full max-h-80 object-contain rounded-xl border border-slate-700 bg-slate-800" />
-                    <button type="button"
-                      onClick={() => { setImageFile(null); setImagePreview(null); setResult(null); setError(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
-                      className="absolute top-2 end-2 bg-slate-800/90 hover:bg-slate-700 text-slate-300 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-600 transition">
-                      {t.imageChange}
+              <div>
+                {/* Sub-toggle */}
+                <div className="flex gap-1 bg-slate-800/60 rounded-lg p-1 mb-4">
+                  {(["screenshot", "url"] as const).map((mode) => (
+                    <button key={mode} type="button"
+                      onClick={() => { setTweetMode(mode); setResult(null); setError(null); }}
+                      className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition ${
+                        tweetMode === mode ? "bg-sky-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
+                      }`}>
+                      {mode === "screenshot" ? t.tweetModeScreenshot : t.tweetModeUrl}
                     </button>
-                  </div>
-                ) : (
-                  <div
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
-                    className={`w-full h-44 flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed cursor-pointer transition ${
-                      isDragging ? "border-sky-500 bg-sky-950/20" : "border-slate-700 bg-slate-800/30 hover:border-slate-600 hover:bg-slate-800/50"
-                    }`}
-                  >
-                    <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                      </svg>
-                    </div>
-                    <p className="text-slate-300 text-sm font-medium">{t.imageDropZone}</p>
-                    <p className="text-slate-500 text-xs">{t.imageHint} · Ctrl+V to paste</p>
-                  </div>
-                )}
-                <div className="flex justify-end mt-3">
-                  <button type="submit" disabled={loading || !imageFile}
-                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-semibold rounded-xl transition shadow-lg shadow-blue-900/30">
-                    {loading ? t.btnAnalyzingImage : t.btnCheckImage}
-                  </button>
+                  ))}
                 </div>
-              </form>
+
+                {tweetMode === "screenshot" && (
+                  <form onSubmit={handleImageSubmit}>
+                    <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={onFileChange} />
+                    {imagePreview ? (
+                      <div className="relative mb-4">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={imagePreview} alt="Tweet screenshot preview" className="w-full max-h-80 object-contain rounded-xl border border-slate-700 bg-slate-800" />
+                        <button type="button"
+                          onClick={() => { setImageFile(null); setImagePreview(null); setResult(null); setError(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                          className="absolute top-2 end-2 bg-slate-800/90 hover:bg-slate-700 text-slate-300 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-600 transition">
+                          {t.imageChange}
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => fileInputRef.current?.click()}
+                        onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+                        className={`w-full h-44 flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed cursor-pointer transition ${
+                          isDragging ? "border-sky-500 bg-sky-950/20" : "border-slate-700 bg-slate-800/30 hover:border-slate-600 hover:bg-slate-800/50"
+                        }`}
+                      >
+                        <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                          </svg>
+                        </div>
+                        <p className="text-slate-300 text-sm font-medium">{t.imageDropZone}</p>
+                        <p className="text-slate-500 text-xs">{t.imageHint} · Ctrl+V to paste</p>
+                      </div>
+                    )}
+                    <div className="flex justify-end mt-3">
+                      <button type="submit" disabled={loading || !imageFile}
+                        className="px-6 py-2.5 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-semibold rounded-xl transition shadow-lg shadow-sky-900/30">
+                        {loading ? t.btnAnalyzingImage : t.btnCheckImage}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {tweetMode === "url" && (
+                  <form onSubmit={handleTweetUrlSubmit}>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <div className="absolute inset-y-0 start-3.5 flex items-center pointer-events-none text-sky-400">
+                          <IconX />
+                        </div>
+                        <input type="url" value={tweetUrl} onChange={(e) => setTweetUrl(e.target.value)}
+                          placeholder={t.tweetUrlPlaceholder}
+                          className="w-full bg-slate-800/50 border border-slate-700/50 rounded-xl ps-10 pe-4 py-3.5 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 transition text-sm" />
+                      </div>
+                      <button type="submit" disabled={loading || !tweetUrl.trim()}
+                        className="px-5 py-3 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-sm font-semibold rounded-xl transition shrink-0">
+                        {loading ? t.btnFetching : t.btnCheckTweetUrl}
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">{t.tweetUrlNote}</p>
+                  </form>
+                )}
+              </div>
             )}
 
             {/* YouTube tab */}
