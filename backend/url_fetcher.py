@@ -226,6 +226,65 @@ def _fetch_youtube(url: str) -> dict:
     }
 
 
+def _fetch_twitter(url: str) -> dict:
+    """
+    Fetch tweet content using Twitter's public oEmbed endpoint (no auth).
+    Falls back to SerpAPI search if oEmbed is unavailable.
+    """
+    tweet_text = ""
+    author_name = ""
+
+    # oEmbed — public, no API key, returns tweet HTML with full text
+    try:
+        r = requests.get(
+            f"https://publish.twitter.com/oembed?url={url}&format=json&omit_script=true",
+            headers=HEADERS, timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            author_name = data.get("author_name", "")
+            html = data.get("html", "")
+            if html:
+                soup = BeautifulSoup(html, "html.parser")
+                p = soup.find("p")
+                if p:
+                    tweet_text = p.get_text(separator=" ", strip=True)
+    except Exception:
+        pass
+
+    # SerpAPI fallback — search by author name if we have it, else raw URL
+    if not tweet_text:
+        serpapi_key = os.getenv("SERPAPI_KEY", "")
+        if serpapi_key and serpapi_key != "your_serpapi_key_here":
+            query = f'"{author_name}" twitter' if author_name else url
+            parts = []
+            for r in _serp_search(query, serpapi_key, num=5):
+                if r.get("snippet"):
+                    parts.append(r["snippet"])
+            tweet_text = "\n".join(parts).strip()
+
+    if not tweet_text:
+        raise ValueError(
+            "Could not retrieve tweet content. "
+            "The tweet may be private, deleted, or not indexed. "
+            "Try the Screenshot tab instead."
+        )
+
+    text_parts = []
+    if author_name:
+        text_parts.append(f"Tweet by {author_name}:")
+    text_parts.append(tweet_text)
+
+    return {
+        "platform": "twitter",
+        "url": url,
+        "title": None,
+        "author": author_name or None,
+        "published_date": None,
+        "text": "\n".join(text_parts),
+    }
+
+
 def fetch_url_content(url: str) -> dict:
     """
     Fetch a public URL and extract readable content + metadata.
@@ -235,6 +294,9 @@ def fetch_url_content(url: str) -> dict:
 
     if platform == "youtube":
         return _fetch_youtube(url)
+
+    if platform == "twitter":
+        return _fetch_twitter(url)
 
     if platform in BLOCKED_PLATFORMS:
         # Best-effort direct fetch (mobile Facebook)
